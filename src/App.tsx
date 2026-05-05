@@ -1,9 +1,29 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 function App() {
   const [greetMsg, setGreetMsg] = useState("");
   const [name, setName] = useState("");
+  const [kernelStatus, setKernelStatus] = useState<"connecting" | "online" | "offline">("connecting");
+
+  useEffect(() => {
+    const checkKernel = async () => {
+      try {
+        const response = await fetch("http://localhost:7338/heartbeat");
+        if (response.ok) {
+          setKernelStatus("online");
+        } else {
+          setKernelStatus("offline");
+        }
+      } catch (err) {
+        setKernelStatus("offline");
+      }
+    };
+
+    checkKernel();
+    const interval = setInterval(checkKernel, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   async function greet() {
     setGreetMsg(await invoke("greet", { name }));
@@ -13,12 +33,12 @@ function App() {
     <main className="flex flex-col items-center justify-center min-h-screen bg-ascension-bg text-ascension-pink font-sans selection:bg-ascension-magenta selection:text-white">
       <div data-tauri-drag-region className="fixed top-0 left-0 right-0 h-8 flex items-center px-4 cursor-default">
         <div className="flex gap-2">
-          <div className="w-2 h-2 rounded-full bg-ascension-pink animate-pulse" />
+          <div className={`w-2 h-2 rounded-full ${kernelStatus === "online" ? "bg-ascension-pink animate-pulse" : "bg-red-500"}`} />
           <div className="w-2 h-2 rounded-full bg-ascension-purple opacity-50" />
           <div className="w-2 h-2 rounded-full bg-ascension-cyan opacity-50" />
         </div>
         <span className="ml-4 text-[10px] font-mono uppercase tracking-[0.2em] opacity-40 select-none">
-          Ascension Kernel v0.1.0 // System Stable
+          Ascension Kernel v0.1.0 // {kernelStatus === "online" ? "System Stable" : "Kernel Offline"}
         </span>
       </div>
 
