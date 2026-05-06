@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 
 type AuditReport = {
   passed: boolean;
@@ -19,12 +19,27 @@ type ProjectNode = {
   children: ProjectNode[];
 };
 
+type VisualNode = {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  is_dir: boolean;
+  depth: number;
+};
+
+type VisualLink = {
+  source: string;
+  target: string;
+};
+
 type KernelEvent = 
   | { type: "Thought", payload: string }
   | { type: "SystemLog", payload: string }
   | { type: "ModelStatus", payload: { model: string, status: string } }
   | { type: "JusticeAudit", payload: AuditReport }
   | { type: "SentryFrame", payload: { frame: string, motion_detected: bool } }
+  | { type: "AudioStatus", payload: { level: number, noise_detected: bool } }
   | { type: "CommandOutput", payload: CommandResult }
   | { type: "GraphUpdate", payload: ProjectNode };
 
@@ -37,11 +52,49 @@ function App() {
   const [selectedModel, setSelectedModel] = useState<"gemini" | "ollama">("gemini");
   const [sentryFrame, setSentryFrame] = useState<string | null>(null);
   const [motionDetected, setMotionDetected] = useState(false);
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [noiseDetected, setNoiseDetected] = useState(false);
   const [projectGraph, setProjectGraph] = useState<ProjectNode | null>(null);
   const [activeTab, setActiveTab] = useState<"terminal" | "sentry" | "graph">("terminal");
   
   const ws = useRef<WebSocket | null>(null);
   const logIdCounter = useRef(0);
+
+  // --- Visual Graph Logic ---
+  const visualData = useMemo(() => {
+    if (!projectGraph) return { nodes: [], links: [] };
+
+    const nodes: VisualNode[] = [];
+    const links: VisualLink[] = [];
+    const centerX = 400;
+    const centerY = 300;
+
+    const traverse = (node: ProjectNode, parentX: number, parentY: number, depth: number, angleStart: number, angleEnd: number) => {
+      const id = node.path;
+      const radius = depth * 120;
+      const angle = (angleStart + angleEnd) / 2;
+      
+      const x = depth === 0 ? centerX : centerX + radius * Math.cos(angle);
+      const y = depth === 0 ? centerY : centerY + radius * Math.sin(angle);
+
+      nodes.push({ id, name: node.name, x, y, is_dir: node.is_dir, depth });
+
+      if (node.children) {
+        const childCount = node.children.length;
+        const angleStep = (angleEnd - angleStart) / Math.max(childCount, 1);
+        
+        node.children.forEach((child, i) => {
+          const childAngleStart = angleStart + i * angleStep;
+          const childAngleEnd = childAngleStart + angleStep;
+          links.push({ source: id, target: child.path });
+          traverse(child, x, y, depth + 1, childAngleStart, childAngleEnd);
+        });
+      }
+    };
+
+    traverse(projectGraph, centerX, centerY, 0, 0, Math.PI * 2);
+    return { nodes, links };
+  }, [projectGraph]);
 
   useEffect(() => {
     const checkKernel = async () => {
@@ -80,6 +133,12 @@ function App() {
           if (data.type === "SentryFrame") {
             setSentryFrame(data.payload.frame);
             setMotionDetected(data.payload.motion_detected);
+            return;
+          }
+
+          if (data.type === "AudioStatus") {
+            setAudioLevel(data.payload.level);
+            setNoiseDetected(data.payload.noise_detected);
             return;
           }
 
@@ -177,8 +236,16 @@ function App() {
   return (
     <main className="flex flex-col items-center justify-center min-h-screen bg-ascension-bg text-ascension-pink font-sans selection:bg-ascension-magenta selection:text-white overflow-hidden scanlines crt-flicker">
       
-      {/* Top Status Bar */}
-      <div data-tauri-drag-region className="fixed top-0 left-0 right-0 h-10 flex items-center justify-between px-6 cursor-default z-50 bg-black/40 backdrop-blur-md border-b border-ascension-purple/20">
+      {/* Custom Resize Handles */}
+      <div className="fixed top-0 left-0 w-1 h-full cursor-nw-resize z-[100]" />
+      <div className="fixed top-0 right-0 w-1 h-full cursor-ne-resize z-[100]" />
+      <div className="fixed bottom-0 left-0 w-full h-1 cursor-s-resize z-[100]" />
+      <div className="fixed bottom-0 right-0 w-4 h-4 cursor-nwse-resize z-[100] flex items-end justify-end p-0.5">
+         <div className="w-1.5 h-1.5 border-r border-b border-ascension-pink/40" />
+      </div>
+
+      {/* Top Status Bar (Drag Region) */}
+      <div data-tauri-drag-region className="fixed top-0 left-0 right-0 h-10 flex items-center justify-between px-6 cursor-move z-50 bg-black/40 backdrop-blur-md border-b border-ascension-purple/20">
         <div className="flex items-center gap-3">
           <div className="flex gap-1.5">
             <div className={`w-2 h-2 rounded-full shadow-[0_0_8px] ${kernelStatus === "online" ? "bg-ascension-pink shadow-ascension-pink animate-pulse" : "bg-red-500 shadow-red-500"}`} />
@@ -294,27 +361,65 @@ function App() {
           {activeTab === "graph" && (
             <div className="flex-1 p-8 rounded-xl border border-ascension-magenta/30 bg-black/60 backdrop-blur-xl shadow-2xl flex flex-col relative overflow-hidden animate-in zoom-in-95 duration-500">
                <div className="flex justify-between items-center mb-6">
-                 <h2 className="text-xl font-black text-ascension-magenta tracking-widest uppercase">Project Memory Graph</h2>
-                 <span className="text-[10px] font-mono text-ascension-purple/60">ROOT: ./</span>
+                 <h2 className="text-xl font-black text-ascension-magenta tracking-widest uppercase">Neural Memory Map</h2>
+                 <span className="text-[10px] font-mono text-ascension-purple/60">PROJECT SYNAPSE VIEW</span>
                </div>
-               <div className="flex-1 bg-black/40 rounded-lg border border-ascension-magenta/10 p-6 font-mono text-xs overflow-y-auto custom-scrollbar">
-                 {projectGraph ? (
-                   <div className="space-y-4">
-                     <div className="flex items-center gap-2 text-ascension-magenta font-bold">
-                       <span>📁</span> {projectGraph.name}
-                     </div>
-                     <div className="pl-6 space-y-2">
-                       {projectGraph.children.map((child, i) => (
-                         <div key={i} className={`flex items-center gap-2 ${child.is_dir ? 'text-ascension-purple' : 'text-ascension-cyan/70'}`}>
-                           <span>{child.is_dir ? '📁' : '📄'}</span>
-                           <span>{child.name}</span>
-                         </div>
-                       ))}
-                     </div>
-                   </div>
+               
+               <div className="flex-1 relative bg-black/40 rounded-lg border border-ascension-magenta/10 overflow-hidden cursor-crosshair">
+                 {visualData.nodes.length > 0 ? (
+                   <svg width="100%" height="100%" viewBox="0 0 800 600" className="animate-in fade-in duration-1000">
+                     {/* Draw Links (Synapses) */}
+                     {visualData.links.map((link, i) => {
+                       const source = visualData.nodes.find(n => n.id === link.source);
+                       const target = visualData.nodes.find(n => n.id === link.target);
+                       if (!source || !target) return null;
+                       return (
+                         <line 
+                           key={i}
+                           x1={source.x} y1={source.y}
+                           x2={target.x} y2={target.y}
+                           stroke="#bd93f9"
+                           strokeWidth="0.5"
+                           strokeOpacity="0.3"
+                           className="animate-pulse"
+                         />
+                       );
+                     })}
+
+                     {/* Draw Nodes */}
+                     {visualData.nodes.map((node) => (
+                       <g key={node.id} transform={`translate(${node.x},${node.y})`} className="group">
+                         <circle 
+                           r={node.depth === 0 ? 8 : node.is_dir ? 5 : 3}
+                           fill={node.depth === 0 ? "#d600ff" : node.is_dir ? "#bd93f9" : "#8be9fd"}
+                           className={`${node.is_dir ? 'animate-pulse' : ''} group-hover:scale-150 transition-transform duration-300`}
+                           style={{ filter: `blur(${node.depth === 0 ? '2px' : '0px'})` }}
+                         />
+                         <circle 
+                           r={node.depth === 0 ? 12 : node.is_dir ? 8 : 5}
+                           fill="transparent"
+                           stroke={node.depth === 0 ? "#d600ff" : node.is_dir ? "#bd93f9" : "#8be9fd"}
+                           strokeWidth="0.5"
+                           strokeOpacity="0.2"
+                         />
+                         <text 
+                           y="-12"
+                           textAnchor="middle"
+                           fill="white"
+                           fontSize="8"
+                           className="font-mono opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none uppercase tracking-tighter"
+                         >
+                           {node.name}
+                         </text>
+                       </g>
+                     ))}
+                   </svg>
                  ) : (
-                   <div className="flex items-center justify-center h-full opacity-20">Mapping Project Structure...</div>
+                   <div className="flex items-center justify-center h-full opacity-20 italic">Initializing Memory Synapses...</div>
                  )}
+                 
+                 {/* Decorative background grid */}
+                 <div className="absolute inset-0 pointer-events-none opacity-5 bg-[radial-gradient(#bd93f9_1px,transparent_1px)] bg-[size:40px_40px]" />
                </div>
             </div>
           )}
@@ -323,8 +428,19 @@ function App() {
             <div className="flex-1 p-8 rounded-xl border border-ascension-cyan/30 bg-black/60 backdrop-blur-xl shadow-2xl flex flex-col relative overflow-hidden animate-in slide-in-from-top-4 duration-500">
                <div className="flex justify-between items-center mb-6">
                  <h2 className="text-xl font-black text-ascension-cyan tracking-widest uppercase">Sentry Command Center</h2>
-                 <div className="px-3 py-1 rounded bg-red-500/20 border border-red-500/40">
-                   <span className="text-[10px] font-black text-red-500 uppercase">Live Feed</span>
+                 <div className="flex gap-4">
+                    <div className="px-3 py-1 rounded bg-black/40 border border-ascension-purple/20 flex items-center gap-3">
+                        <span className="text-[8px] font-mono text-ascension-purple uppercase">Audio DB:</span>
+                        <div className="w-24 h-1.5 bg-black/60 rounded-full overflow-hidden border border-white/5">
+                            <div className="h-full bg-ascension-cyan transition-all duration-75" style={{ width: `${Math.min(audioLevel * 400, 100)}%` }} />
+                        </div>
+                    </div>
+                    <div className={`px-3 py-1 rounded border ${noiseDetected ? 'bg-orange-500/20 border-orange-500/40 text-orange-400' : 'bg-black/40 border-ascension-purple/20 text-ascension-purple/40'}`}>
+                      <span className="text-[10px] font-black uppercase">Noise Sense</span>
+                    </div>
+                    <div className="px-3 py-1 rounded bg-red-500/20 border border-red-500/40">
+                      <span className="text-[10px] font-black text-red-500 uppercase">Live Feed</span>
+                    </div>
                  </div>
                </div>
                <div className="flex-1 bg-black/40 rounded-lg border border-ascension-cyan/10 overflow-hidden relative">
@@ -334,7 +450,10 @@ function App() {
                    <div className="flex items-center justify-center h-full opacity-20">Awaiting Signal...</div>
                  )}
                  <div className="absolute inset-0 pointer-events-none border-2 border-ascension-cyan/20 m-4" />
-                 <div className="absolute top-8 left-8 text-[10px] font-mono text-ascension-cyan/60">REC [00:00:00:00]</div>
+                 <div className="absolute top-8 left-8 text-[10px] font-mono text-ascension-cyan/60 flex items-center gap-2">
+                    <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
+                    REC [00:00:00:00]
+                 </div>
                </div>
             </div>
           )}
@@ -378,15 +497,23 @@ function App() {
             </div>
           </div>
 
-          {/* Sentry Mini-Feed (Click to switch tab) */}
+          {/* Sentry Mini-Feed */}
           <div 
             onClick={() => setActiveTab("sentry")}
-            className={`h-48 p-1 rounded-xl border-2 transition-all duration-300 bg-black/40 backdrop-blur-md flex flex-col relative group overflow-hidden cursor-pointer ${motionDetected ? 'border-red-500 glow-magenta' : 'border-ascension-purple/20 hover:border-ascension-cyan/50'}`}>
-            <div className="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/60 border border-white/10 z-20">
-              <div className={`w-1.5 h-1.5 rounded-full ${motionDetected ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} />
-              <span className={`text-[8px] font-black uppercase tracking-widest ${motionDetected ? 'text-red-500' : 'text-green-500'}`}>
-                {motionDetected ? 'MOTION DETECTED' : 'SENTRY ACTIVE'}
-              </span>
+            className={`h-48 p-1 rounded-xl border-2 transition-all duration-300 bg-black/40 backdrop-blur-md flex flex-col relative group overflow-hidden cursor-pointer ${motionDetected || noiseDetected ? 'border-red-500 glow-magenta' : 'border-ascension-purple/20 hover:border-ascension-cyan/50'}`}>
+            <div className="absolute top-2 right-2 flex flex-col gap-1 items-end z-20">
+              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/60 border border-white/10">
+                <div className={`w-1.5 h-1.5 rounded-full ${motionDetected ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} />
+                <span className={`text-[8px] font-black uppercase tracking-widest ${motionDetected ? 'text-red-500' : 'text-green-500'}`}>
+                  {motionDetected ? 'MOTION' : 'EYES'}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/60 border border-white/10">
+                <div className={`w-1.5 h-1.5 rounded-full ${noiseDetected ? 'bg-red-500 animate-pulse' : 'bg-cyan-500'}`} />
+                <span className={`text-[8px] font-black uppercase tracking-widest ${noiseDetected ? 'text-red-500' : 'text-cyan-500'}`}>
+                  {noiseDetected ? 'NOISE' : 'EARS'}
+                </span>
+              </div>
             </div>
             
             <div className="flex-1 flex items-center justify-center relative overflow-hidden rounded-lg">
@@ -399,9 +526,13 @@ function App() {
               ) : (
                 <div className="flex flex-col items-center gap-2 opacity-20">
                    <div className="w-8 h-8 border-2 border-t-ascension-pink border-transparent rounded-full animate-spin" />
-                   <span className="text-[10px] font-mono tracking-widest uppercase italic">Initializing Eyes...</span>
+                   <span className="text-[10px] font-mono tracking-widest uppercase italic">Initializing Sentry...</span>
                 </div>
               )}
+              {/* Audio visualizer bar in mini feed */}
+              <div className="absolute bottom-0 left-0 w-full h-1 bg-black/40 overflow-hidden">
+                 <div className="h-full bg-ascension-cyan" style={{ width: `${Math.min(audioLevel * 400, 100)}%` }} />
+              </div>
               <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.2)_50%)] bg-[length:100%_2px]" />
             </div>
           </div>

@@ -16,7 +16,9 @@
         "width": 1000,
         "height": 700,
         "decorations": false,
-        "transparent": true
+        "transparent": true,
+        "resizable": true,
+        "shadow": true
       }
     ],
     "security": {

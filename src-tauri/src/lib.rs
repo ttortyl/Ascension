@@ -25,6 +25,7 @@ pub enum KernelEvent {
     ModelStatus { model: String, status: String },
     JusticeAudit(brain::AuditReport),
     SentryFrame { frame: String, motion_detected: bool },
+    AudioStatus { level: f32, noise_detected: bool },
     CommandOutput(commands::CommandResult),
     GraphUpdate(memory::ProjectNode),
 }

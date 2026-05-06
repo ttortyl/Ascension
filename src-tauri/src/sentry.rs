@@ -8,34 +8,84 @@ use std::thread;
 use std::time::Duration;
 use tokio::sync::broadcast;
 use crate::KernelEvent;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 pub fn start_sentry_loop(tx: broadcast::Sender<KernelEvent>) {
-    // We use a native OS thread because nokhwa::Camera is not Send/Sync across await points
+    let tx_audio = tx.clone();
+    
+    // 1. Audio Monitoring Thread (The Ears)
     thread::spawn(move || {
-        // Initialize camera
+        let host = cpal::default_host();
+        let device = match host.default_input_device() {
+            Some(d) => d,
+            None => {
+                let _ = tx_audio.send(KernelEvent::SystemLog("Sentry Audio Error: No input device found".into()));
+                return;
+            }
+        };
+
+        let config = match device.default_input_config() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        let tx_cb = tx_audio.clone();
+        let noise_threshold = 0.15; // Sensitivity for noise detection
+        let mut last_log_time = std::time::Instant::now();
+
+        let stream = device.build_input_stream(
+            &config.into(),
+            move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                let rms = (data.iter().map(|&x| x * x).sum::<f32>() / data.len() as f32).sqrt();
+                let noise_detected = rms > noise_threshold;
+
+                if noise_detected && last_log_time.elapsed().as_secs() > 5 {
+                    let _ = tx_cb.send(KernelEvent::SystemLog(format!("[ALERT] Significant Noise Detected (Level: {:.2})", rms)));
+                    last_log_time = std::time::Instant::now();
+                }
+
+                let _ = tx_cb.send(KernelEvent::AudioStatus {
+                    level: rms,
+                    noise_detected,
+                });
+            },
+            move |err| {
+                eprintln!("Audio stream error: {}", err);
+            },
+            None
+        ).unwrap();
+
+        stream.play().unwrap();
+        
+        loop {
+            thread::sleep(Duration::from_secs(1));
+        }
+    });
+
+    // 2. Video Monitoring Thread (The Eyes)
+    thread::spawn(move || {
         let index = CameraIndex::Index(0);
         let requested = RequestedFormat::new::<RgbFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
         
         let mut camera = match Camera::new(index, requested) {
             Ok(c) => c,
             Err(e) => {
-                let _ = tx.send(KernelEvent::SystemLog(format!("Sentry Error: Could not initialize camera: {}", e)));
+                let _ = tx.send(KernelEvent::SystemLog(format!("Sentry Video Error: {}", e)));
                 return;
             }
         };
 
         if let Err(e) = camera.open_stream() {
-            let _ = tx.send(KernelEvent::SystemLog(format!("Sentry Error: Could not open stream: {}", e)));
+            let _ = tx.send(KernelEvent::SystemLog(format!("Sentry Video Error: {}", e)));
             return;
         }
 
-        let _ = tx.send(KernelEvent::SystemLog("Sentry Core: Eyes Online".into()));
+        let _ = tx.send(KernelEvent::SystemLog("Sentry Core: Eyes & Ears Online".into()));
 
         let mut last_frame: Option<ImageBuffer<Rgb<u8>, Vec<u8>>> = None;
-        let motion_threshold = 20.0; // Sensitivity adjustment
+        let motion_threshold = 20.0;
 
         loop {
-            // Capture frame
             let frame = match camera.frame() {
                 Ok(f) => f,
                 Err(_) => {
@@ -49,17 +99,13 @@ pub fn start_sentry_loop(tx: broadcast::Sender<KernelEvent>) {
                 Err(_) => continue,
             };
 
-            // 1. Motion Detection (Simple pixel difference)
             let mut motion_score = 0.0;
             if let Some(prev) = &last_frame {
                 let current_pixels = decoded.as_raw();
                 let prev_pixels = prev.as_raw();
-                
-                // Compare a subset of pixels for performance
                 let step = 10; 
                 let mut diff_sum: u64 = 0;
                 let mut count = 0;
-                
                 for i in (0..current_pixels.len()).step_by(step) {
                     let diff = (current_pixels[i] as i32 - prev_pixels[i] as i32).abs();
                     diff_sum += diff as u64;
@@ -71,23 +117,18 @@ pub fn start_sentry_loop(tx: broadcast::Sender<KernelEvent>) {
             let motion_detected = motion_score > motion_threshold;
             last_frame = Some(decoded.clone());
 
-            // 2. Encode to JPEG for streaming
-            // Downscale for performance (mini-feed doesn't need 1080p)
             let resized = image::imageops::thumbnail(&decoded, 320, 240);
             let mut jpeg_data = Vec::new();
             let mut cursor = Cursor::new(&mut jpeg_data);
             
             if resized.write_to(&mut cursor, image::ImageFormat::Jpeg).is_ok() {
                 let base64_frame = general_purpose::STANDARD.encode(jpeg_data);
-                
-                // 3. Broadcast (broadcast channel is Send/Sync)
                 let _ = tx.send(KernelEvent::SentryFrame {
                     frame: base64_frame,
                     motion_detected,
                 });
             }
 
-            // Limit frame rate to ~10 FPS
             thread::sleep(Duration::from_millis(100));
         }
     });
