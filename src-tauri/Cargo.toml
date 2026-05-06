@@ -31,4 +31,5 @@ async-trait = "0.1"
 nokhwa = { version = "0.10", features = ["input-native"] }
 image = "0.25"
 base64 = "0.22"
+walkdir = "2"
 

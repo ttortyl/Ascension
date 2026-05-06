@@ -1,5 +1,7 @@
 mod brain;
 mod sentry;
+mod commands;
+mod memory;
 
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
@@ -23,12 +25,19 @@ pub enum KernelEvent {
     ModelStatus { model: String, status: String },
     JusticeAudit(brain::AuditReport),
     SentryFrame { frame: String, motion_detected: bool },
+    CommandOutput(commands::CommandResult),
+    GraphUpdate(memory::ProjectNode),
 }
 
 #[derive(Deserialize)]
 struct PromptRequest {
     prompt: String,
     model: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CommandRequest {
+    command: String,
 }
 
 struct AppState {
@@ -42,6 +51,21 @@ fn greet(name: &str) -> String {
 
 async fn heartbeat() -> &'static str {
     "Ascension Kernel: Online"
+}
+
+async fn get_graph() -> Json<memory::ProjectNode> {
+    Json(memory::get_project_graph("."))
+}
+
+async fn process_command(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<AppState>>,
+    Json(payload): Json<CommandRequest>,
+) -> Json<serde_json::Value> {
+    let tx = state.tx.clone();
+    let result = commands::execute_shell(&payload.command, tx.clone()).await;
+    let _ = tx.send(KernelEvent::CommandOutput(result.clone()));
+    
+    Json(serde_json::json!({ "result": result }))
 }
 
 async fn process_prompt(
@@ -67,7 +91,7 @@ async fn process_prompt(
         Ok(primary_response) => {
             let _ = tx.send(KernelEvent::Thought("Primary response generated. Initializing Judicial Audit...".into()));
             
-            // Chief Justice Audit (using Gemini as the judge for now)
+            // Chief Justice Audit
             let justice = brain::ChiefJustice {
                 brain: Box::new(brain::GeminiBrain),
             };
@@ -142,6 +166,8 @@ fn start_kernel_server(tx: broadcast::Sender<KernelEvent>) {
             .route("/heartbeat", get(heartbeat))
             .route("/ws", get(ws_handler))
             .route("/prompt", post(process_prompt))
+            .route("/execute", post(process_command))
+            .route("/graph", get(get_graph))
             .layer(CorsLayer::permissive())
             .with_state(state);
 
