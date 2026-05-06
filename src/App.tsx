@@ -1,15 +1,22 @@
 import { useState, useEffect, useRef } from "react";
 
+type AuditReport = {
+  passed: boolean;
+  reasoning: string;
+  adjusted_response: string | null;
+};
+
 type KernelEvent = 
   | { type: "Thought", payload: string }
   | { type: "SystemLog", payload: string }
-  | { type: "ModelStatus", payload: { model: string, status: string } };
+  | { type: "ModelStatus", payload: { model: string, status: string } }
+  | { type: "JusticeAudit", payload: AuditReport };
 
 function App() {
   const [prompt, setPrompt] = useState("");
   const [response, setResponse] = useState("");
   const [kernelStatus, setKernelStatus] = useState<"connecting" | "online" | "offline">("connecting");
-  const [logs, setLogs] = useState<{ id: number, text: string, type: string }[]>([]);
+  const [logs, setLogs] = useState<{ id: number, text: string, type: string, passed?: boolean }[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedModel, setSelectedModel] = useState<"gemini" | "ollama">("gemini");
   const ws = useRef<WebSocket | null>(null);
@@ -39,6 +46,7 @@ function App() {
           const data: KernelEvent = JSON.parse(event.data);
           let logText = "";
           let type = "system";
+          let passed = undefined;
 
           if (data.type === "SystemLog") {
             logText = `[SYS] ${data.payload}`;
@@ -49,10 +57,14 @@ function App() {
           } else if (data.type === "ModelStatus") {
             logText = `[MODEL] ${data.model}: ${data.status}`;
             type = "model";
+          } else if (data.type === "JusticeAudit") {
+            logText = `[JUSTICE] ${data.payload.passed ? 'PASSED' : 'FAILED'}: ${data.payload.reasoning}`;
+            type = "justice";
+            passed = data.payload.passed;
           }
 
           setLogs((prev) => {
-            const newLog = { id: logIdCounter.current++, text: logText, type };
+            const newLog = { id: logIdCounter.current++, text: logText, type, passed };
             return [...prev.slice(-12), newLog];
           });
         } catch (err) {
@@ -105,18 +117,18 @@ function App() {
             <div className="w-2 h-2 rounded-full bg-ascension-purple opacity-30" />
             <div className="w-2 h-2 rounded-full bg-ascension-cyan opacity-30" />
           </div>
-          <span className="text-[10px] font-bold font-mono uppercase tracking-[0.3em] text-glow-pink">
+          <span className="text-[10px] font-bold font-mono uppercase tracking-[0.3em] text-glow-pink text-nowrap">
             Ascension Kernel v0.1.0 // {kernelStatus === "online" ? "SYSTEM STABLE" : "KERNEL OFFLINE"}
           </span>
         </div>
         
         <div className="flex items-center gap-6">
-          <div className="flex gap-4 text-[9px] font-mono uppercase tracking-widest text-ascension-purple/60">
+          <div className="flex gap-4 text-[9px] font-mono uppercase tracking-widest text-ascension-purple/60 hidden md:flex">
             <span>MEM: 42%</span>
             <span>CPU: 12%</span>
             <span>NET: ENCRYPTED</span>
           </div>
-          <div className="h-4 w-px bg-ascension-purple/20" />
+          <div className="h-4 w-px bg-ascension-purple/20 hidden md:block" />
           <span className="text-[10px] font-bold text-ascension-cyan text-glow-cyan uppercase">
             {selectedModel.toUpperCase()} ACTIVE
           </span>
@@ -125,15 +137,15 @@ function App() {
 
       <div className="flex gap-8 w-full max-w-[1400px] px-10 h-[700px] mt-12 relative z-10">
         
-        {/* Navigation Sidebar (Decorative for now) */}
+        {/* Navigation Sidebar */}
         <div className="w-16 flex flex-col items-center py-6 gap-8 border-r border-ascension-purple/10">
-          <div className="w-10 h-10 rounded bg-ascension-pink/10 border border-ascension-pink/30 flex items-center justify-center text-ascension-pink shadow-lg shadow-ascension-pink/10 cursor-pointer hover:bg-ascension-pink/20 transition-all">
-            <span className="text-xl font-bold">A</span>
+          <div className="w-10 h-10 rounded bg-ascension-pink/10 border border-ascension-pink/30 flex items-center justify-center text-ascension-pink shadow-lg shadow-ascension-pink/10 cursor-pointer hover:bg-ascension-pink/20 transition-all group">
+            <span className="text-xl font-bold group-hover:scale-110 transition-transform">A</span>
           </div>
           <div className="space-y-6 opacity-40">
-            <div className="w-6 h-6 border-2 border-ascension-purple rounded rotate-45" />
-            <div className="w-6 h-6 border-2 border-ascension-cyan rounded-full" />
-            <div className="w-6 h-6 border-2 border-ascension-magenta rounded" />
+            <div title="Dashboard" className="w-6 h-6 border-2 border-ascension-purple rounded rotate-45 hover:opacity-100 transition-opacity cursor-pointer" />
+            <div title="Sentry" className="w-6 h-6 border-2 border-ascension-cyan rounded-full hover:opacity-100 transition-opacity cursor-pointer" />
+            <div title="Judicial Ledger" className="w-6 h-6 border-2 border-ascension-magenta rounded hover:opacity-100 transition-opacity cursor-pointer" />
           </div>
         </div>
 
@@ -169,7 +181,7 @@ function App() {
                   <option value="gemini">Gemini</option>
                   <option value="ollama">Ollama</option>
                 </select>
-                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-ascension-purple/40">▼</div>
+                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-ascension-purple/40 text-[8px]">▼</div>
               </div>
 
               <div className="flex-1 relative">
@@ -187,9 +199,9 @@ function App() {
               <button 
                 onClick={handleSubmit}
                 disabled={isProcessing || !prompt}
-                className={`bg-ascension-pink hover:bg-ascension-magenta text-ascension-bg font-black px-10 rounded-lg transition-all active:scale-95 shadow-xl shadow-ascension-pink/20 uppercase tracking-widest ${isProcessing ? 'opacity-50 animate-pulse' : ''}`}
+                className={`bg-ascension-pink hover:bg-ascension-magenta text-ascension-bg font-black px-10 rounded-lg transition-all active:scale-95 shadow-xl shadow-ascension-pink/20 uppercase tracking-widest min-w-[140px] ${isProcessing ? 'opacity-50 animate-pulse' : ''}`}
               >
-                {isProcessing ? "EXEC" : "EXECUTE"}
+                {isProcessing ? "PROCESSING" : "EXECUTE"}
               </button>
             </div>
           </div>
@@ -218,9 +230,13 @@ function App() {
                   className={`border-l-2 pl-3 py-1 transition-all animate-in slide-in-from-right-4 duration-300 ${
                     log.type === "thought" ? "border-ascension-pink bg-ascension-pink/5 text-ascension-pink" :
                     log.type === "model" ? "border-ascension-cyan bg-ascension-cyan/5 text-ascension-cyan" :
+                    log.type === "justice" ? (log.passed ? "border-green-500 bg-green-500/5 text-green-400" : "border-red-500 bg-red-500/5 text-red-400") :
                     "border-ascension-purple text-ascension-purple/80"
                   }`}
                 >
+                  <p className="leading-relaxed break-words font-bold uppercase mb-0.5 text-[8px] opacity-70">
+                    {log.type} // {log.type === 'justice' ? (log.passed ? 'VERIFIED' : 'FAILED') : 'INFO'}
+                  </p>
                   <p className="leading-relaxed break-words">{log.text}</p>
                 </div>
               ))}

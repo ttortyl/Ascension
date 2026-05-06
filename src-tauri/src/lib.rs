@@ -6,11 +6,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use brain::{Brain, GeminiBrain};
+use brain::Brain;
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-use tauri::Manager;
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -21,6 +20,7 @@ pub enum KernelEvent {
     Thought(String),
     SystemLog(String),
     ModelStatus { model: String, status: String },
+    JusticeAudit(brain::AuditReport),
 }
 
 #[derive(Deserialize)]
@@ -62,9 +62,34 @@ async fn process_prompt(
     });
 
     match brain.generate(&payload.prompt).await {
-        Ok(response) => {
-            let _ = tx.send(KernelEvent::Thought("Response generated successfully".into()));
-            Json(serde_json::json!({ "response": response }))
+        Ok(primary_response) => {
+            let _ = tx.send(KernelEvent::Thought("Primary response generated. Initializing Judicial Audit...".into()));
+            
+            // Chief Justice Audit (using Gemini as the judge for now)
+            let justice = brain::ChiefJustice {
+                brain: Box::new(brain::GeminiBrain),
+            };
+
+            match justice.audit(&payload.prompt, &primary_response).await {
+                Ok(report) => {
+                    let _ = tx.send(KernelEvent::JusticeAudit(report.clone()));
+                    
+                    let final_response = if report.passed {
+                        primary_response
+                    } else {
+                        report.adjusted_response.clone().unwrap_or(primary_response)
+                    };
+
+                    Json(serde_json::json!({ 
+                        "response": final_response,
+                        "audit": report 
+                    }))
+                }
+                Err(e) => {
+                    let _ = tx.send(KernelEvent::SystemLog(format!("Justice Error: {}", e)));
+                    Json(serde_json::json!({ "response": primary_response, "audit_error": e }))
+                }
+            }
         }
         Err(e) => {
             let _ = tx.send(KernelEvent::SystemLog(format!("Brain Error ({}): {}", brain.name(), e)));
@@ -145,7 +170,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .setup(move |app| {
+        .setup(move |_app| {
             start_kernel_server(tx);
             Ok(())
         })

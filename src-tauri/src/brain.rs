@@ -90,3 +90,52 @@ impl Brain for OllamaBrain {
             .ok_or_else(|| format!("Invalid response from Ollama: {:?}", json))
     }
 }
+
+pub struct ChiefJustice {
+    pub brain: Box<dyn Brain + Send + Sync>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditReport {
+    pub passed: bool,
+    pub reasoning: String,
+    pub adjusted_response: Option<String>,
+}
+
+impl ChiefJustice {
+    pub async fn audit(&self, original_prompt: &str, original_response: &str) -> Result<AuditReport, String> {
+        let audit_prompt = format!(
+            "YOU ARE THE PROJECT ASCENSION CHIEF JUSTICE. 
+            YOUR TASK IS TO AUDIT THE FOLLOWING AI RESPONSE FOR LOGIC, HALLUCINATIONS, AND SAFETY.
+            
+            OPERATOR PROMPT: {}
+            PRIMARY BRAIN RESPONSE: {}
+            
+            IF THE RESPONSE IS ACCURATE AND SAFE, RETURN: 'PASSED | [REASONING]'
+            IF THE RESPONSE IS WRONG OR NEEDS CORRECTION, RETURN: 'FAILED | [REASONING] | [NEW CORRECTED RESPONSE]'
+            
+            YOUR OUTPUT MUST BE IN THE EXACT FORMAT ABOVE.",
+            original_prompt, original_response
+        );
+
+        let audit_raw = self.brain.generate(&audit_prompt).await?;
+        
+        if audit_raw.starts_with("PASSED") {
+            let parts: Vec<&str> = audit_raw.split('|').collect();
+            Ok(AuditReport {
+                passed: true,
+                reasoning: parts.get(1).unwrap_or(&"Audit passed by Chief Justice").trim().to_string(),
+                adjusted_response: None,
+            })
+        } else if audit_raw.starts_with("FAILED") {
+            let parts: Vec<&str> = audit_raw.split('|').collect();
+            Ok(AuditReport {
+                passed: false,
+                reasoning: parts.get(1).unwrap_or(&"Audit failed by Chief Justice").trim().to_string(),
+                adjusted_response: parts.get(2).map(|s| s.trim().to_string()),
+            })
+        } else {
+            Err(format!("Chief Justice returned invalid format: {}", audit_raw))
+        }
+    }
+}

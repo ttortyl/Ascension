@@ -1,6 +1,12 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  --color-ascension-bg: #1a1a2e;
+  --color-ascension-pink: #ff79c6;
+  --color-ascension-purple: #bd93f9;
+  --color-ascension-cyan: #8be9fd;
+  --color-ascension-magenta: #d600ff;
+}
 
 @layer base {
   :root {
