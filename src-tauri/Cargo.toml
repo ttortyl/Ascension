@@ -11,6 +11,14 @@ edition = "2021"
 name = "ascension_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "ascension"
+path = "src/main.rs"
+
+[[bin]]
+name = "lazarus"
+path = "src/bin/lazarus.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -20,8 +28,8 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-axum = { version = "0.7", features = ["ws"] }
-tower-http = { version = "0.5", features = ["cors"] }
+axum = { version = "0.7", features = ["ws", "multipart"] }
+tower-http = { version = "0.5", features = ["cors", "fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures-util = "0.3"

@@ -12,6 +12,29 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 pub fn start_sentry_loop(tx: broadcast::Sender<KernelEvent>) {
     let tx_audio = tx.clone();
+    let tx_cleanup = tx.clone();
+
+    // 0. Cleanup Thread (The Janitor)
+    thread::spawn(move || {
+        loop {
+            if let Ok(entries) = std::fs::read_dir("./Archives") {
+                let now = std::time::SystemTime::now();
+                let seven_days = Duration::from_secs(7 * 24 * 60 * 60);
+
+                for entry in entries.flatten() {
+                    if let Ok(metadata) = entry.metadata() {
+                        if let Ok(modified) = metadata.modified() {
+                            if now.duration_since(modified).unwrap_or(Duration::ZERO) > seven_days {
+                                let _ = std::fs::remove_file(entry.path());
+                                let _ = tx_cleanup.send(KernelEvent::SystemLog(format!("[SYS] Purged expired archive: {:?}", entry.file_name())));
+                            }
+                        }
+                    }
+                }
+            }
+            thread::sleep(Duration::from_secs(3600)); // Run every hour
+        }
+    });
     
     // 1. Audio Monitoring Thread (The Ears)
     thread::spawn(move || {

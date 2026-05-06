@@ -159,6 +159,41 @@ async fn handle_socket(socket: WebSocket, state: std::sync::Arc<AppState>) {
     };
 }
 
+use std::fs;
+use std::path::Path;
+
+async fn list_archives() -> Json<Vec<String>> {
+    let mut files = Vec::new();
+    if let Ok(entries) = fs::read_dir("./Archives") {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.ends_with(".webm") {
+                    files.push(name.to_string());
+                }
+            }
+        }
+    }
+    Json(files)
+}
+
+async fn archive_video(mut multipart: axum::extract::Multipart) -> &'static str {
+    if !Path::new("./Archives").exists() {
+        let _ = fs::create_dir("./Archives");
+    }
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        if let Some(name) = field.name() {
+            if name == "video" {
+                let filename = field.file_name().unwrap_or("clip.webm").to_string();
+                let data = field.bytes().await.unwrap();
+                let path = format!("./Archives/{}", filename);
+                let _ = fs::write(path, data);
+            }
+        }
+    }
+    "Archived"
+}
+
 fn start_kernel_server(tx: broadcast::Sender<KernelEvent>) {
     let state = std::sync::Arc::new(AppState { tx: tx.clone() });
 
@@ -169,6 +204,9 @@ fn start_kernel_server(tx: broadcast::Sender<KernelEvent>) {
             .route("/prompt", post(process_prompt))
             .route("/execute", post(process_command))
             .route("/graph", get(get_graph))
+            .route("/archive", post(archive_video))
+            .route("/list_archives", get(list_archives))
+            .nest_service("/archives_stream", tower_http::services::ServeDir::new("./Archives"))
             .layer(CorsLayer::permissive())
             .with_state(state);
 

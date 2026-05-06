@@ -55,10 +55,75 @@ function App() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [noiseDetected, setNoiseDetected] = useState(false);
   const [projectGraph, setProjectGraph] = useState<ProjectNode | null>(null);
-  const [activeTab, setActiveTab] = useState<"terminal" | "sentry" | "graph">("terminal");
+  const [activeTab, setActiveTab] = useState<"terminal" | "sentry" | "graph" | "archives">("terminal");
+  const [archives, setArchives] = useState<string[]>([]);
+  const [selectedVideo, setSelectedVideo] = useState<string | null>(null);
   
   const ws = useRef<WebSocket | null>(null);
   const logIdCounter = useRef(0);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const isRecordingRef = useRef(false);
+
+  // --- Recording Logic ---
+  useEffect(() => {
+    if ((motionDetected || noiseDetected) && !isRecordingRef.current) {
+      startRecording();
+    }
+  }, [motionDetected, noiseDetected]);
+
+  function startRecording() {
+    if (!canvasRef.current || isRecordingRef.current) return;
+    
+    const stream = canvasRef.current.captureStream(10); // 10 fps
+    const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+    
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunksRef.current.push(e.data);
+    };
+
+    recorder.onstop = async () => {
+      const blob = new Blob(chunksRef.current, { type: 'video/webm' });
+      chunksRef.current = [];
+      const formData = new FormData();
+      formData.append('video', blob, `sentry_${Date.now()}.webm`);
+      
+      try {
+        await fetch("http://localhost:7338/archive", {
+          method: "POST",
+          body: formData,
+        });
+        setLogs(prev => [...prev, { id: logIdCounter.current++, text: "[SYS] Sentry Clip Archived", type: "system" }]);
+      } catch (err) {
+        console.error("Failed to archive video", err);
+      }
+    };
+
+    recorder.start();
+    isRecordingRef.current = true;
+    mediaRecorderRef.current = recorder;
+
+    // Record for 10 seconds
+    setTimeout(() => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+        mediaRecorderRef.current.stop();
+        isRecordingRef.current = false;
+      }
+    }, 10000);
+  }
+
+  // Draw frame to canvas for recording
+  useEffect(() => {
+    if (sentryFrame && canvasRef.current) {
+      const ctx = canvasRef.current.getContext('2d');
+      const img = new Image();
+      img.onload = () => {
+        ctx?.drawImage(img, 0, 0, 320, 240);
+      };
+      img.src = `data:image/jpeg;base64,${sentryFrame}`;
+    }
+  }, [sentryFrame]);
 
   // --- Visual Graph Logic ---
   const visualData = useMemo(() => {
@@ -245,8 +310,9 @@ function App() {
       </div>
 
       {/* Top Status Bar (Drag Region) */}
-      <div data-tauri-drag-region className="fixed top-0 left-0 right-0 h-10 flex items-center justify-between px-6 cursor-move z-50 bg-black/40 backdrop-blur-md border-b border-ascension-purple/20">
-        <div className="flex items-center gap-3">
+      <div className="fixed top-0 left-0 right-0 h-10 flex items-center justify-between px-6 z-50 bg-black/40 backdrop-blur-md border-b border-ascension-purple/20">
+        <div data-tauri-drag-region className="absolute inset-0 cursor-move" />
+        <div className="flex items-center gap-3 relative z-10 pointer-events-none">
           <div className="flex gap-1.5">
             <div className={`w-2 h-2 rounded-full shadow-[0_0_8px] ${kernelStatus === "online" ? "bg-ascension-pink shadow-ascension-pink animate-pulse" : "bg-red-500 shadow-red-500"}`} />
             <div className="w-2 h-2 rounded-full bg-ascension-purple opacity-30" />
@@ -296,12 +362,82 @@ function App() {
               onClick={() => setActiveTab("graph")}
               className={`w-6 h-6 border-2 rounded transition-all cursor-pointer ${activeTab === 'graph' ? 'border-ascension-magenta' : 'border-ascension-purple/30 opacity-40 hover:opacity-100'}`} 
             />
+            <div 
+              title="Archives" 
+              onClick={async () => {
+                setActiveTab("archives");
+                try {
+                  const res = await fetch("http://localhost:7338/list_archives");
+                  const data = await res.json();
+                  setArchives(data);
+                } catch (err) {
+                  console.error("Failed to fetch archives", err);
+                }
+              }}
+              className={`w-6 h-6 border-2 rounded-sm transition-all cursor-pointer ${activeTab === 'archives' ? 'border-ascension-pink' : 'border-ascension-purple/30 opacity-40 hover:opacity-100'}`} 
+            >
+              <div className="w-full h-full flex flex-col gap-0.5 p-1">
+                <div className="w-full h-px bg-current" />
+                <div className="w-full h-px bg-current" />
+              </div>
+            </div>
           </div>
         </div>
 
         {/* Main Interface */}
         <div className="flex-1 flex flex-col gap-6 overflow-hidden">
           
+          {activeTab === "archives" && (
+            <div className="flex-1 p-8 rounded-xl border border-ascension-pink/30 bg-black/60 backdrop-blur-xl shadow-2xl flex flex-col relative overflow-hidden animate-in fade-in duration-500">
+               <div className="flex justify-between items-center mb-6">
+                 <h2 className="text-xl font-black text-ascension-pink tracking-widest uppercase">Video Archives</h2>
+                 <span className="text-[10px] font-mono text-ascension-purple/60 uppercase">Sentry Evidence Logs</span>
+               </div>
+               
+               <div className="flex-1 grid grid-cols-3 gap-6 overflow-y-auto custom-scrollbar pr-2">
+                 {archives.length === 0 && (
+                   <div className="col-span-3 flex items-center justify-center h-full opacity-20 italic">No evidence recorded yet...</div>
+                 )}
+                 {archives.map((video) => (
+                   <div 
+                     key={video}
+                     onClick={() => setSelectedVideo(video)}
+                     className={`group p-4 rounded border transition-all cursor-pointer ${selectedVideo === video ? 'border-ascension-pink bg-ascension-pink/10 shadow-lg shadow-ascension-pink/10' : 'border-ascension-purple/10 bg-black/40 hover:border-ascension-pink/40'}`}
+                   >
+                     <div className="aspect-video bg-black/60 rounded mb-3 flex items-center justify-center overflow-hidden border border-white/5 relative">
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
+                        <span className="text-[24px] group-hover:scale-125 transition-transform">▶</span>
+                     </div>
+                     <p className="text-[10px] font-mono text-ascension-purple group-hover:text-ascension-pink truncate uppercase">
+                       {video.replace('.webm', '').replace('sentry_', '')}
+                     </p>
+                   </div>
+                 ))}
+               </div>
+
+               {selectedVideo && (
+                 <div className="fixed inset-0 z-[200] bg-black/90 backdrop-blur-xl flex items-center justify-center p-12 animate-in fade-in duration-300">
+                    <div className="w-full max-w-[1000px] flex flex-col gap-4">
+                       <div className="flex justify-between items-center">
+                          <h3 className="text-ascension-pink font-black uppercase tracking-widest">{selectedVideo}</h3>
+                          <button 
+                            onClick={() => setSelectedVideo(null)}
+                            className="text-ascension-purple hover:text-white uppercase font-black text-xs"
+                          >
+                            [ CLOSE ]
+                          </button>
+                       </div>
+                       <video 
+                         src={`http://localhost:7338/archives_stream/${selectedVideo}`} 
+                         controls 
+                         autoPlay 
+                         className="w-full rounded-lg border-2 border-ascension-pink/30 shadow-2xl shadow-ascension-pink/20"
+                       />
+                    </div>
+                 </div>
+               )}
+            </div>
+          )}
           {activeTab === "terminal" && (
             <div className="flex-1 p-8 rounded-xl border border-ascension-purple/30 bg-black/60 backdrop-blur-xl shadow-2xl shadow-ascension-magenta/5 flex flex-col relative overflow-hidden group animate-in fade-in duration-500">
               <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-ascension-pink/30 to-transparent" />
@@ -561,6 +697,9 @@ function App() {
           100% { transform: translateX(300%); }
         }
       `}</style>
+      
+      {/* Hidden recording canvas */}
+      <canvas ref={canvasRef} width="320" height="240" className="hidden" />
     </main>
   );
 }
