@@ -1,4 +1,5 @@
 mod brain;
+mod sentry;
 
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
@@ -21,6 +22,7 @@ pub enum KernelEvent {
     SystemLog(String),
     ModelStatus { model: String, status: String },
     JusticeAudit(brain::AuditReport),
+    SentryFrame { frame: String, motion_detected: bool },
 }
 
 #[derive(Deserialize)]
@@ -168,10 +170,13 @@ pub fn run() {
 
     let (tx, _rx) = broadcast::channel(100);
 
+    let sentry_tx = tx.clone();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(move |_app| {
             start_kernel_server(tx);
+            sentry::start_sentry_loop(sentry_tx);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![greet])

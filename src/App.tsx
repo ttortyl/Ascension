@@ -10,7 +10,8 @@ type KernelEvent =
   | { type: "Thought", payload: string }
   | { type: "SystemLog", payload: string }
   | { type: "ModelStatus", payload: { model: string, status: string } }
-  | { type: "JusticeAudit", payload: AuditReport };
+  | { type: "JusticeAudit", payload: AuditReport }
+  | { type: "SentryFrame", payload: { frame: string, motion_detected: bool } };
 
 function App() {
   const [prompt, setPrompt] = useState("");
@@ -19,6 +20,9 @@ function App() {
   const [logs, setLogs] = useState<{ id: number, text: string, type: string, passed?: boolean }[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedModel, setSelectedModel] = useState<"gemini" | "ollama">("gemini");
+  const [sentryFrame, setSentryFrame] = useState<string | null>(null);
+  const [motionDetected, setMotionDetected] = useState(false);
+  
   const ws = useRef<WebSocket | null>(null);
   const logIdCounter = useRef(0);
 
@@ -44,6 +48,13 @@ function App() {
       ws.current.onmessage = (event) => {
         try {
           const data: KernelEvent = JSON.parse(event.data);
+          
+          if (data.type === "SentryFrame") {
+            setSentryFrame(data.payload.frame);
+            setMotionDetected(data.payload.motion_detected);
+            return;
+          }
+
           let logText = "";
           let type = "system";
           let passed = undefined;
@@ -129,7 +140,7 @@ function App() {
             <span>NET: ENCRYPTED</span>
           </div>
           <div className="h-4 w-px bg-ascension-purple/20 hidden md:block" />
-          <span className="text-[10px] font-bold text-ascension-cyan text-glow-cyan uppercase">
+          <span className="text-[10px] font-bold text-ascension-cyan text-glow-cyan uppercase text-nowrap">
             {selectedModel.toUpperCase()} ACTIVE
           </span>
         </div>
@@ -244,17 +255,30 @@ function App() {
             </div>
           </div>
 
-          {/* Sentry Mini-Feed (Placeholder) */}
-          <div className="h-40 p-4 rounded-xl border border-ascension-purple/20 bg-black/40 backdrop-blur-md flex flex-col relative group overflow-hidden">
-            <div className="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-0.5 rounded bg-red-500/20 border border-red-500/40">
-              <div className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />
-              <span className="text-[8px] font-black text-red-500 uppercase tracking-widest">Live Sentry</span>
+          {/* Sentry Feed */}
+          <div className={`h-48 p-1 rounded-xl border-2 transition-all duration-300 bg-black/40 backdrop-blur-md flex flex-col relative group overflow-hidden ${motionDetected ? 'border-red-500 glow-magenta' : 'border-ascension-purple/20'}`}>
+            <div className="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/60 border border-white/10 z-20">
+              <div className={`w-1.5 h-1.5 rounded-full ${motionDetected ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`} />
+              <span className={`text-[8px] font-black uppercase tracking-widest ${motionDetected ? 'text-red-500' : 'text-green-500'}`}>
+                {motionDetected ? 'MOTION DETECTED' : 'SENTRY ACTIVE'}
+              </span>
             </div>
-            <div className="flex-1 flex items-center justify-center opacity-20 group-hover:opacity-30 transition-opacity">
-              <span className="text-[10px] font-mono tracking-widest uppercase italic">Feed Encrypted</span>
-            </div>
-            <div className="h-1 w-full bg-ascension-purple/10 rounded-full overflow-hidden">
-              <div className="h-full w-1/3 bg-ascension-pink animate-[loading_2s_infinite]" />
+            
+            <div className="flex-1 flex items-center justify-center relative overflow-hidden rounded-lg">
+              {sentryFrame ? (
+                <img 
+                  src={`data:image/jpeg;base64,${sentryFrame}`} 
+                  className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity grayscale hover:grayscale-0 contrast-125 brightness-75"
+                  alt="Sentry Feed"
+                />
+              ) : (
+                <div className="flex flex-col items-center gap-2 opacity-20">
+                   <div className="w-8 h-8 border-2 border-t-ascension-pink border-transparent rounded-full animate-spin" />
+                   <span className="text-[10px] font-mono tracking-widest uppercase italic">Initializing Eyes...</span>
+                </div>
+              )}
+              {/* Scanline overlay for sentry specifically */}
+              <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.2)_50%)] bg-[length:100%_2px]" />
             </div>
           </div>
         </div>
