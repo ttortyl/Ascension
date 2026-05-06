@@ -12,6 +12,7 @@ function App() {
   const [kernelStatus, setKernelStatus] = useState<"connecting" | "online" | "offline">("connecting");
   const [logs, setLogs] = useState<string[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<"gemini" | "ollama">("gemini");
   const ws = useRef<WebSocket | null>(null);
 
   useEffect(() => {
@@ -67,7 +68,7 @@ function App() {
       const res = await fetch("http://localhost:7338/prompt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt, model: selectedModel }),
       });
       const data = await res.json();
       if (data.response) {
@@ -118,6 +119,15 @@ function App() {
             </div>
 
             <div className="flex gap-3">
+              <select 
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value as any)}
+                className="bg-ascension-bg border border-ascension-purple px-2 rounded text-ascension-cyan focus:outline-none focus:border-ascension-pink transition-colors text-[10px] uppercase font-bold tracking-tighter"
+                disabled={isProcessing}
+              >
+                <option value="gemini">Gemini</option>
+                <option value="ollama">Ollama</option>
+              </select>
               <input
                 className="flex-1 bg-ascension-bg border border-ascension-purple p-3 rounded text-ascension-cyan focus:outline-none focus:border-ascension-pink transition-colors placeholder:text-ascension-purple/50"
                 value={prompt}

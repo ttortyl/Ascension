@@ -46,3 +46,47 @@ impl Brain for GeminiBrain {
             .ok_or_else(|| format!("Invalid response from Gemini: {:?}", json))
     }
 }
+
+pub struct OllamaBrain {
+    pub model: String,
+}
+
+impl Default for OllamaBrain {
+    fn default() -> Self {
+        Self {
+            model: "llama3".to_string(),
+        }
+    }
+}
+
+#[async_trait]
+impl Brain for OllamaBrain {
+    fn name(&self) -> &str {
+        "Ollama"
+    }
+
+    async fn generate(&self, prompt: &str) -> Result<String, String> {
+        let url = "http://localhost:11434/api/generate";
+
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({
+            "model": self.model,
+            "prompt": prompt,
+            "stream": false
+        });
+
+        let response = client
+            .post(url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Ollama connection error: {}. Is Ollama running?", e))?;
+
+        let json: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+        
+        json["response"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| format!("Invalid response from Ollama: {:?}", json))
+    }
+}

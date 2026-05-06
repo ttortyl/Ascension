@@ -47,10 +47,15 @@ async fn process_prompt(
     Json(payload): Json<PromptRequest>,
 ) -> Json<serde_json::Value> {
     let tx = state.tx.clone();
-    let _ = tx.send(KernelEvent::Thought(format!("Processing prompt: {}", payload.prompt)));
+    let model_choice = payload.model.unwrap_or_else(|| "gemini".to_string());
+    
+    let _ = tx.send(KernelEvent::Thought(format!("Routing to {} for: {}", model_choice, payload.prompt)));
 
-    // For now, we only have Gemini
-    let brain = GeminiBrain;
+    let brain: Box<dyn Brain + Send + Sync> = match model_choice.to_lowercase().as_str() {
+        "ollama" => Box::new(brain::OllamaBrain::default()),
+        _ => Box::new(brain::GeminiBrain),
+    };
+
     let _ = tx.send(KernelEvent::ModelStatus {
         model: brain.name().into(),
         status: "active".into(),
@@ -62,7 +67,7 @@ async fn process_prompt(
             Json(serde_json::json!({ "response": response }))
         }
         Err(e) => {
-            let _ = tx.send(KernelEvent::SystemLog(format!("Brain Error: {}", e)));
+            let _ = tx.send(KernelEvent::SystemLog(format!("Brain Error ({}): {}", brain.name(), e)));
             Json(serde_json::json!({ "error": e }))
         }
     }
